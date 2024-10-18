@@ -1,0 +1,195 @@
+File processing system with multiprocessing and multithreading
+
+ 
+
+Project overview
+
+This project aims to develop a system that processes multiple large files in parallel using multiprocessing and multithreading, while employing inter-process communication (IPC) mechanisms for message passing between processes. The project allows students to compare the advantages and disadvantages of multiprocessing versus multithreading in terms of performance, resource consumption, and complexity.
+
+ 
+
+Problem description
+
+The system should accept a directory containing multiple large text files. The goal is to count the frequency of a specific word (or set of words) in each file. Each file is processed in a separate process using fork(). Inside each process, multiple threads should be created to read and process portions of the file in parallel.
+
+ 
+
+Files
+
+Some files from The Calgary Corpus
+
+https://corpus.canterbury.ac.nz/descriptions/#calgary
+
+There are 14 files in this corpus. However, you just need to apply the processing over a collection of 7 files which are given in the table below.
+
+File
+	
+
+Abbrev
+	
+
+Category
+	
+
+Size
+
+bib
+	
+
+bib
+	
+
+Bibliography (refer format)
+	
+
+ 111261
+
+paper1
+	
+
+paper1
+	
+
+Technical paper
+	
+
+ 53161
+
+paper2
+	
+
+paper2
+	
+
+Technical paper
+	
+
+ 82199
+
+progc
+	
+
+progc
+	
+
+Source code in "C"
+	
+
+ 39611
+
+progl
+	
+
+progl
+	
+
+Source code in LISP
+	
+
+ 71646
+
+progp
+	
+
+progp
+	
+
+Source code in PASCAL
+	
+
+ 49379
+
+trans
+	
+
+trans
+	
+
+Transcript of terminal session
+	
+
+ 93695
+
+You can download zip file, unzip and exclude 7 unnecessary files before applying word count
+
+ 
+
+Key features
+
+    Process creation:
+        Each child process should be responsible for one file.
+    Multithreading:
+        Within each process, use multithreading (e.g., using POSIX threads) to split the file into parts, and assign each part to a thread for parallel word counting.
+        Compare the use of multiple threads in a single process to processing each file with a single thread.
+    Inter-Process Communication (IPC)
+        Use pipes, message queues, or shared memory between the child processes and the parent process.
+        The child processes should communicate their results (word counts) to the parent process.
+    Performance Comparison
+        Measure and compare the performance (time taken, CPU usage, memory usage) of multiprocessing versus multithreading for this task.
+        Discuss the advantages and disadvantages of both approaches in terms of context switching, memory overhead, and parallelism.
+
+ 
+
+Project Requirements
+
+    Process management: The system should use fork() to create separate processes for each file and implement proper process synchronization and communication.
+    IPC mechanism: Implement message passing using one of the IPC mechanisms (pipes, message queues, shared memory).
+    Threading: Use multithreading within each process to improve the processing time for large files.
+    Error handling: Implement proper error handling for process creation, IPC setup, and multithreading.
+    Performance evaluation: Provide metrics and comparisons between multiprocessing and multithreading for the file processing task.
+
+ 
+
+Deliverables
+
+    Code submission
+        The code should be well-structured, modular, and make appropriate use of process creation, threading, and IPC.
+        Clear and concise comments and documentation should explain how the system works.
+    Minimal report requirements
+        Description of the project
+            Overview of how multiprocessing and multithreading are used.
+            Consideration of the advantages and disadvantages of each approach
+        Structure of the code:
+            Include diagrams showing how processes and threads are created and how communication happens via IPC.
+            Description of the implementation required by project requirements
+                Process management
+                IPC mechanism
+                Threading
+                Error handling
+                Performance evaluation
+        Instructions: Provide a clear guide on how to run the system and test different scenarios.
+         
+        Performance evaluation
+            Include screenshots or examples of file processing.
+            Provide sample scenarios for word counting, showing the difference in performance between multiprocessing and multithreading.
+        Discussion
+            Explain challenges faced during the implementation, the observed pros and cons of multiprocessing and multithreading, and any limitations or possible improvements.
+
+ 
+
+ 
+
+Evaluation Criteria
+
+    Code (20%)
+    Report (70%)
+        Description of the project (10%)
+            Completeness and clarity of problem definitions and summary of your approaches
+        Structure of the code with diagram (15%)
+            Quality of the provided diagrams and explanation to show the overall structure of your code
+            Satisfaction and completeness of the project requirements
+        Instructions on How to use the system (5%)
+            Clarity and completeness of the usage instructions provided.
+        Verification of code functionality (20%)
+            Histogram of words count in the figure
+            Top 50 most frequent words with frequency
+            Difference in performance between multiprocessing and multithreading
+            Discussion on the verification results
+        Discussion of Findings (10%)
+            Insightfulness of the discussion on project findings, limitations, and improvement suggestions.
+        Overall Quality of Report (10%)
+            Quality of editing, structuring, and presenting the report.
+    GitHub Repository Setting (10%)
+        Setting to Public: The repository is accessible to reviewers.
+        Curating the Repository: All relevant project files, including code and documentation, are present and well-organized within the repository.
+
