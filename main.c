@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <mqueue.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,19 +10,36 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MAX_FILES_COUNT 7
 #define CHILD_ID 0
 #define QUEUE_NAME "/queue"
+#define MAX_THREADS 1
+#define BYTES_PER_READ 1024
 
 struct Msg {
   char *str;
 };
 struct WordsToFind {
   char **words;
+  int length;
+};
+
+struct TaskQueue {
+  long *queue;
   int count;
+  int current;
+  pthread_mutex_t mutex;
+};
+
+struct ThreadArgs {
+  char **words;
+  int *count;
+  pthread_mutex_t *mutexes;
+  struct TaskQueue *taskQueue;
+  char *filePath;
 };
 
 struct Directory {
+  char *root;
   char **files;
   int amount;
 };
@@ -37,6 +55,7 @@ void formatStrArray(char *output, char **list, int length) {
 
 struct Directory readDirectory(char *directory) {
   struct Directory dir;
+  dir.root = directory;
   dir.files = malloc(sizeof(char *));
   dir.amount = 0;
 
@@ -96,12 +115,73 @@ int getWord(FILE *file, char *output, int maxSize) {
   return 0;
 }
 
+void *processText(void *args) {
+  struct ThreadArgs *arg = args;
+  FILE *file = fopen(arg->filePath, "r");
+
+  long offset = 0;
+
+  if (fseek(file, offset, SEEK_SET) != 0) {
+    fprintf(stderr, "Error file are not seekable: %s\n", strerror(errno));
+    exit(1);
+  }
+
+  char *word = malloc(100 * sizeof(char));
+  while (getWord(file, word, 100) != EOF) {
+    printf("'%s'\n", word);
+  }
+
+  free(word);
+  pthread_exit(0);
+}
+
 void processFile(struct WordsToFind words, char *root, char *file) {
   mqd_t queueId = createMqQueue(O_WRONLY);
-  struct Msg msg = {file};
-  if (mq_send(queueId, (const char *)&msg, sizeof(char *), 0) != 0) {
-    puts("error sending queue");
+
+  struct TaskQueue taskQueue;
+  long queue[words.length];
+  pthread_mutex_t qMutex;
+  if (pthread_mutex_init(&qMutex, NULL) != 0) {
+    fprintf(stderr, "Error making mutex: %s\n", strerror(errno));
+    exit(1);
   }
+  taskQueue.queue = queue;
+  taskQueue.count = words.length;
+  taskQueue.current = 0;
+  taskQueue.mutex = qMutex;
+
+  pthread_mutex_t mutexes[words.length];
+  int count[words.length];
+  for (int i = 0; i < words.length; i++) {
+    count[i] = 0;
+    queue[i] = 0;
+    if (pthread_mutex_init(&mutexes[i], NULL) != 0) {
+      fprintf(stderr, "Error making mutex: %s\n", strerror(errno));
+      exit(1);
+    }
+  }
+
+  pthread_t threads[MAX_THREADS];
+
+  char *filePath = malloc(2 * sizeof(char[256]));
+  strcpy(filePath, root);
+  strcat(filePath, file);
+
+  struct ThreadArgs arg = {words.words, count, mutexes, &taskQueue, filePath};
+
+  for (int i = 0; i < MAX_THREADS; i++) {
+    pthread_create(&threads[i], NULL, processText, (void *)&arg);
+  }
+
+  /* struct Msg msg = {file}; */
+  /* if (mq_send(queueId, (const char *)&msg, sizeof(char *), 0) != 0) { */
+  /*   puts("error sending queue"); */
+  /* } */
+  for (int i = 0; i < MAX_THREADS; i++) {
+    pthread_join(threads[i], NULL);
+  }
+
+  free(filePath);
   mq_close(queueId);
 }
 
@@ -115,7 +195,7 @@ void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
     fprintf(stderr, "Error forking directory: %s\n", strerror(errno));
     exit(1);
   case CHILD_ID:
-    processFile(words, dir.files[offset]);
+    processFile(words, dir.root, dir.files[offset]);
     exit(0);
   default:
     readFiles(words, dir, offset + 1);
@@ -125,7 +205,7 @@ void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
 int main(void) {
   mq_unlink(QUEUE_NAME);
 
-  char *tempwords[] = {"stuff", "hi"};
+  char *tempwords[] = {"test", "hi"};
   const int wordsToFindLength = 2;
 
   char **words = malloc(wordsToFindLength * sizeof(char *));
@@ -135,8 +215,7 @@ int main(void) {
 
   struct WordsToFind wordsToFind = {words, wordsToFindLength};
 
-  // todo read files from directory
-  struct Directory dir = readDirectory("./files/");
+  struct Directory dir = readDirectory("./test/");
 
   readFiles(wordsToFind, dir, 0);
 
@@ -158,6 +237,7 @@ int main(void) {
     }
   }
 
+  free(words);
   mq_close(queueId);
   mq_unlink(QUEUE_NAME);
   return 0;
