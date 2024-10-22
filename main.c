@@ -16,6 +16,11 @@
 struct Msg {
   char *str;
 };
+struct WordsToFind {
+  char **words;
+  int count;
+};
+
 struct Directory {
   char **files;
   int amount;
@@ -85,7 +90,7 @@ void processFile(struct WordsToFind words, char *file) {
   mq_close(queueId);
 }
 
-void readFiles(struct Directory dir, int offset) {
+void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
   if (dir.amount <= offset) {
     free(dir.files);
     return;
@@ -95,20 +100,30 @@ void readFiles(struct Directory dir, int offset) {
     fprintf(stderr, "Error forking directory: %s\n", strerror(errno));
     exit(1);
   case CHILD_ID:
-    processFile(dir.files[offset]);
+    processFile(words, dir.files[offset]);
     exit(0);
   default:
-    readFiles(dir, offset + 1);
+    readFiles(words, dir, offset + 1);
   }
 }
 
 int main(void) {
   mq_unlink(QUEUE_NAME);
 
+  char *tempwords[] = {"stuff", "hi"};
+  const int wordsToFindLength = 2;
+
+  char **words = malloc(wordsToFindLength * sizeof(char *));
+  for (int i = 0; i < wordsToFindLength; i++) {
+    words[i] = tempwords[i];
+  }
+
+  struct WordsToFind wordsToFind = {words, wordsToFindLength};
+
   // todo read files from directory
   struct Directory dir = readDirectory("./files/");
 
-  readFiles(dir, 0);
+  readFiles(wordsToFind, dir, 0);
 
   mqd_t queueId = createMqQueue(O_RDONLY | O_NONBLOCK);
   struct Msg msg;
