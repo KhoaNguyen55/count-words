@@ -81,7 +81,22 @@ mqd_t createMqQueue(int flags) {
   return queueId;
 }
 
-void processFile(struct WordsToFind words, char *file) {
+int getWord(FILE *file, char *output, int maxSize) {
+  char c = fgetc(file);
+  int i = 0;
+  while (c != ' ' && c != '\n' && i < maxSize) {
+    if (c == EOF) {
+      return EOF;
+    }
+    output[i] = c;
+    i++;
+    c = fgetc(file);
+  }
+  output[i] = '\0';
+  return 0;
+}
+
+void processFile(struct WordsToFind words, char *root, char *file) {
   mqd_t queueId = createMqQueue(O_WRONLY);
   struct Msg msg = {file};
   if (mq_send(queueId, (const char *)&msg, sizeof(char *), 0) != 0) {
