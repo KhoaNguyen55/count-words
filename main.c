@@ -113,13 +113,18 @@ int main(void) {
   mqd_t queueId = createMqQueue(O_RDONLY | O_NONBLOCK);
   struct Msg msg;
 
+  int deadProcesses = 0;
   while (1) {
     if (mq_receive(queueId, (char *)&msg, sizeof(char *) + 1, NULL) != -1) {
       printf("%s\n", msg.str);
     } else if (errno == EAGAIN && waitpid(-1, NULL, WNOHANG) != 0) {
+      deadProcesses++;
+    } else if (errno != EAGAIN) {
+      printf("Error mq_receive: %s\n", strerror(errno));
+    }
+
+    if (deadProcesses == dir.amount) {
       break;
-    } else {
-      puts(strerror(errno));
     }
   }
 
