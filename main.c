@@ -21,7 +21,7 @@ struct Directory {
 struct Directory readDirectory(char *directory) {
   struct Directory dir;
   dir.files = malloc(sizeof(char *));
-  dir.amount = 1;
+  dir.amount = 0;
 
   DIR *dirStream = opendir(directory);
   if (dirStream == NULL) {
@@ -30,15 +30,20 @@ struct Directory readDirectory(char *directory) {
   }
 
   struct dirent *file = readdir(dirStream);
-  int i = 0;
+  int i = 1;
   while (file != NULL) {
     // ignore hidden files
     if (file->d_name[0] != '.') {
-      dir.files[i] = file->d_name;
-      i++;
-      if (dir.amount < i) {
-        dir.amount *= 2;
-        dir.files = reallocarray(dir.files, sizeof(char *), dir.amount);
+      dir.files[dir.amount] = file->d_name;
+      dir.amount++;
+      if (dir.amount > i) {
+        i *= 2;
+        char **temp = reallocarray(dir.files, sizeof(char *), i);
+        if (temp == NULL) {
+          fprintf(stderr, "Error reallocating memory: %s\n", strerror(errno));
+          exit(1);
+        }
+        dir.files = temp;
       }
     }
     file = readdir(dirStream);
