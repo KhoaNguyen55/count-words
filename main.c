@@ -13,6 +13,9 @@
 #define CHILD_ID 0
 #define QUEUE_NAME "/queue"
 
+struct Msg {
+  char *str;
+};
 struct Directory {
   char **files;
   int amount;
@@ -61,15 +64,25 @@ struct Directory readDirectory(char *directory) {
   return dir;
 }
 
-void processFile(char *file) {
-  mqd_t queueId = mq_open(QUEUE_NAME, O_WRONLY);
+mqd_t createMqQueue(int flags) {
+  const struct mq_attr attr = {0, 10, sizeof(char *), 0};
+  // get the queue id
+  mqd_t queueId = mq_open(QUEUE_NAME, flags | O_CREAT, 0666, &attr);
   if (queueId == -1) {
-    fprintf(stderr, "%s\n", strerror(errno));
+    fprintf(stderr, "mq_open: %s\n", strerror(errno));
     exit(1);
   }
 
-  // todo read the file and count the words
-  puts(file);
+  return queueId;
+}
+
+void processFile(struct WordsToFind words, char *file) {
+  mqd_t queueId = createMqQueue(O_WRONLY);
+  struct Msg msg = {file};
+  if (mq_send(queueId, (const char *)&msg, sizeof(char *), 0) != 0) {
+    puts("error sending queue");
+  }
+  mq_close(queueId);
 }
 
 void readFiles(struct Directory dir, int offset) {
@@ -90,18 +103,27 @@ void readFiles(struct Directory dir, int offset) {
 }
 
 int main(void) {
+  mq_unlink(QUEUE_NAME);
+
   // todo read files from directory
   struct Directory dir = readDirectory("./files/");
 
   readFiles(dir, 0);
 
-  // get the queue id
-  mqd_t queueId = mq_open(QUEUE_NAME, O_RDONLY);
-  if (queueId == -1) {
-    fprintf(stderr, "%s\n", strerror(errno));
-    exit(1);
+  mqd_t queueId = createMqQueue(O_RDONLY | O_NONBLOCK);
+  struct Msg msg;
+
+  while (1) {
+    if (mq_receive(queueId, (char *)&msg, sizeof(char *) + 1, NULL) != -1) {
+      printf("%s\n", msg.str);
+    } else if (errno == EAGAIN && waitpid(-1, NULL, WNOHANG) != 0) {
+      break;
+    } else {
+      puts(strerror(errno));
+    }
   }
 
-  wait(NULL);
+  mq_close(queueId);
+  mq_unlink(QUEUE_NAME);
   return 0;
 }
