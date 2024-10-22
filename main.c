@@ -74,7 +74,7 @@ mqd_t createMqQueue(int flags) {
   // get the queue id
   mqd_t queueId = mq_open(QUEUE_NAME, flags | O_CREAT, 0666, &attr);
   if (queueId == -1) {
-    fprintf(stderr, "mq_open: %s\n", strerror(errno));
+    fprintf(stderr, "Error mq_open: %s\n", strerror(errno));
     exit(1);
   }
 
