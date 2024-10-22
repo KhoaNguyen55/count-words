@@ -18,6 +18,15 @@ struct Directory {
   int amount;
 };
 
+void formatStrArray(char *output, char **list, int length) {
+  int len = 0;
+  len += sprintf(output + len, "[");
+  for (int i = 0; i < length; i++) {
+    len += sprintf(output + len, "%s, ", list[i]);
+  }
+  sprintf(output + len - 2, "]");
+}
+
 struct Directory readDirectory(char *directory) {
   struct Directory dir;
   dir.files = malloc(sizeof(char *));
