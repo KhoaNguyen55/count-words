@@ -11,9 +11,8 @@
 #include <unistd.h>
 
 #define CHILD_ID 0
-#define MAX_THREADS 1
-#define MAX_BYTES_PER_READ 1024
-
+#define MAX_THREADS 5
+#define MAX_BYTES_PER_READ 10
 struct chunkSize {
   long start;
   long end;
@@ -21,15 +20,16 @@ struct chunkSize {
 
 struct WordsToFind {
   char **words;
+  int *count;
+  pthread_mutex_t *mutexes;
   int length;
 };
 
 struct ThreadArgs {
-  char **words;
-  int *count;
-  pthread_mutex_t *mutexes;
+  struct WordsToFind *words;
   char *filePath;
   const struct mq_attr *qAttr;
+  char *qName;
   int terminate;
 };
 
@@ -38,6 +38,15 @@ struct Directory {
   char **files;
   int amount;
 };
+
+void formatIntArray(char *output, int *list, int length) {
+  int len = 0;
+  len += sprintf(output + len, "[");
+  for (int i = 0; i < length; i++) {
+    len += sprintf(output + len, "%i, ", list[i]);
+  }
+  sprintf(output + len - 2, "]");
+}
 
 void formatStrArray(char *output, char **list, int length) {
   int len = 0;
@@ -108,12 +117,30 @@ int getWord(FILE *file, char *output, int maxSize) {
   return i;
 }
 
+/* Compare a word with words, if theres a match return the index of the word, -1
+ * otherwise
+ */
+int findWordLocation(struct WordsToFind *words, char *word) {
+  for (int i = 0; i < words->length; i++) {
+    if (strcmp(words->words[i], word) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+void incrementWordCount(struct WordsToFind *words, int location) {
+  pthread_mutex_lock(&words->mutexes[location]);
+  words->count[location] += 1;
+  pthread_mutex_unlock(&words->mutexes[location]);
+}
+
 void *processText(void *args) {
   struct ThreadArgs *arg = args;
   FILE *file = fopen(arg->filePath, "r");
 
   mqd_t threadQueue =
-      createMqQueue("/thread", O_RDONLY | O_NONBLOCK, arg->qAttr);
+      createMqQueue(arg->qName, O_RDONLY | O_NONBLOCK, arg->qAttr);
 
   char *word = malloc(100 * sizeof(char));
   struct chunkSize chunk;
@@ -126,6 +153,7 @@ void *processText(void *args) {
         break;
       }
     }
+
     if (mq_receive(threadQueue, (char *)&chunk, sizeof(struct chunkSize),
                    NULL) != -1) {
       if (fseek(file, chunk.start, SEEK_SET) != 0) {
@@ -135,7 +163,10 @@ void *processText(void *args) {
       while (ftell(file) < chunk.end) {
         int size = getWord(file, word, 100);
         if (size > 0) {
-          printf("chunk: %lu - %lu, '%s'\n", chunk.start, chunk.end, word);
+          int location = findWordLocation(arg->words, word);
+          if (location >= 0) {
+            incrementWordCount(arg->words, location);
+          }
         } else if (size == EOF) {
           break;
         }
@@ -176,21 +207,16 @@ struct chunkSize getNextChunkPosition(FILE *file, long chunkSize) {
 }
 
 void processFile(struct WordsToFind words, char *root, char *fileName) {
+  pid_t pid = getpid();
+  char *qName = malloc(sizeof(char[256]));
+  snprintf(qName, 255, "/thread%i", pid);
+  mq_unlink(qName);
+
   const struct mq_attr pAttr = {0, 10, sizeof(char *), 0};
   mqd_t processQueue = createMqQueue("/process", O_WRONLY, &pAttr);
 
   const struct mq_attr tAttr = {0, words.length, sizeof(struct chunkSize), 0};
-  mqd_t threadQueue = createMqQueue("/thread", O_WRONLY, &tAttr);
-
-  pthread_mutex_t mutexes[words.length];
-  int count[words.length];
-  for (int i = 0; i < words.length; i++) {
-    count[i] = 0;
-    if (pthread_mutex_init(&mutexes[i], NULL) != 0) {
-      fprintf(stderr, "Error making mutex: %s\n", strerror(errno));
-      exit(1);
-    }
-  }
+  mqd_t threadQueue = createMqQueue(qName, O_WRONLY, &tAttr);
 
   pthread_t threads[MAX_THREADS];
 
@@ -198,7 +224,7 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
   strcpy(filePath, root);
   strcat(filePath, fileName);
 
-  struct ThreadArgs arg = {words.words, count, mutexes, filePath, &tAttr, 0};
+  struct ThreadArgs arg = {&words, filePath, &tAttr, qName, 0};
 
   for (int i = 0; i < MAX_THREADS; i++) {
     pthread_create(&threads[i], NULL, processText, (void *)&arg);
@@ -220,9 +246,19 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
     pthread_join(threads[i], NULL);
   }
 
+  char *outputStr = malloc(100 * sizeof(char));
+  formatStrArray(outputStr, words.words, words.length);
+  char *outputInt = malloc(100 * sizeof(char));
+  formatIntArray(outputInt, words.count, words.length);
+  printf("Words: %s ; Found: %s \n", outputStr, outputInt);
+  free(outputInt);
+  free(outputStr);
+
   free(filePath);
   mq_close(processQueue);
   mq_close(threadQueue);
+  mq_unlink(qName);
+  free(qName);
 }
 
 void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
@@ -244,9 +280,8 @@ void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
 
 int main(void) {
   mq_unlink("/process");
-  mq_unlink("/thread");
 
-  char *tempwords[] = {"test", "hi"};
+  char *tempwords[] = {"101", "hi"};
   const int wordsToFindLength = 2;
 
   char **words = malloc(wordsToFindLength * sizeof(char *));
@@ -254,7 +289,17 @@ int main(void) {
     words[i] = tempwords[i];
   }
 
-  struct WordsToFind wordsToFind = {words, wordsToFindLength};
+  pthread_mutex_t mutexes[wordsToFindLength];
+  int count[wordsToFindLength];
+  for (int i = 0; i < wordsToFindLength; i++) {
+    count[i] = 0;
+    if (pthread_mutex_init(&mutexes[i], NULL) != 0) {
+      fprintf(stderr, "Error making mutex: %s\n", strerror(errno));
+      exit(1);
+    }
+  }
+
+  struct WordsToFind wordsToFind = {words, count, mutexes, wordsToFindLength};
 
   struct Directory dir = readDirectory("./test/");
 
@@ -281,7 +326,6 @@ int main(void) {
 
   free(words);
   mq_close(queueId);
-  mq_unlink("/thread");
   mq_unlink("/process");
   return 0;
 }
