@@ -11,31 +11,26 @@
 #include <unistd.h>
 
 #define CHILD_ID 0
-#define QUEUE_NAME "/queue"
 #define MAX_THREADS 1
-#define BYTES_PER_READ 1024
+#define MAX_BYTES_PER_READ 1024
 
-struct Msg {
-  char *str;
+struct chunkSize {
+  long start;
+  long end;
 };
+
 struct WordsToFind {
   char **words;
   int length;
-};
-
-struct TaskQueue {
-  long *queue;
-  int count;
-  int current;
-  pthread_mutex_t mutex;
 };
 
 struct ThreadArgs {
   char **words;
   int *count;
   pthread_mutex_t *mutexes;
-  struct TaskQueue *taskQueue;
   char *filePath;
+  const struct mq_attr *qAttr;
+  int terminate;
 };
 
 struct Directory {
@@ -88,10 +83,8 @@ struct Directory readDirectory(char *directory) {
   return dir;
 }
 
-mqd_t createMqQueue(int flags) {
-  const struct mq_attr attr = {0, 10, sizeof(char *), 0};
-  // get the queue id
-  mqd_t queueId = mq_open(QUEUE_NAME, flags | O_CREAT, 0666, &attr);
+mqd_t createMqQueue(char *queueName, int flags, const struct mq_attr *attr) {
+  mqd_t queueId = mq_open(queueName, flags | O_CREAT, 0600, attr);
   if (queueId == -1) {
     fprintf(stderr, "Error mq_open: %s\n", strerror(errno));
     exit(1);
@@ -101,7 +94,7 @@ mqd_t createMqQueue(int flags) {
 }
 
 int getWord(FILE *file, char *output, int maxSize) {
-  char c = fgetc(file);
+  char c = fgetc_unlocked(file);
   int i = 0;
   while (c != ' ' && c != '\n' && i < maxSize) {
     if (c == EOF) {
@@ -109,52 +102,90 @@ int getWord(FILE *file, char *output, int maxSize) {
     }
     output[i] = c;
     i++;
-    c = fgetc(file);
+    c = fgetc_unlocked(file);
   }
   output[i] = '\0';
-  return 0;
+  return i;
 }
 
 void *processText(void *args) {
   struct ThreadArgs *arg = args;
   FILE *file = fopen(arg->filePath, "r");
 
-  long offset = 0;
-
-  if (fseek(file, offset, SEEK_SET) != 0) {
-    fprintf(stderr, "Error file are not seekable: %s\n", strerror(errno));
-    exit(1);
-  }
+  mqd_t threadQueue =
+      createMqQueue("/thread", O_RDONLY | O_NONBLOCK, arg->qAttr);
 
   char *word = malloc(100 * sizeof(char));
-  while (getWord(file, word, 100) != EOF) {
-    printf("'%s'\n", word);
+  struct chunkSize chunk;
+
+  while (1) {
+    if (arg->terminate) {
+      struct mq_attr attr;
+      mq_getattr(threadQueue, &attr);
+      if (attr.mq_curmsgs == 0) {
+        break;
+      }
+    }
+    if (mq_receive(threadQueue, (char *)&chunk, sizeof(struct chunkSize),
+                   NULL) != -1) {
+      if (fseek(file, chunk.start, SEEK_SET) != 0) {
+        fprintf(stderr, "Error file are not seekable: %s\n", strerror(errno));
+        exit(1);
+      }
+      while (ftell(file) < chunk.end) {
+        int size = getWord(file, word, 100);
+        if (size > 0) {
+          printf("chunk: %lu - %lu, '%s'\n", chunk.start, chunk.end, word);
+        } else if (size == EOF) {
+          break;
+        }
+      }
+    } else if (errno != EAGAIN) {
+      printf("Error thread mq_receive: %s\n", strerror(errno));
+    }
   }
 
   free(word);
   pthread_exit(0);
 }
 
-void processFile(struct WordsToFind words, char *root, char *file) {
-  mqd_t queueId = createMqQueue(O_WRONLY);
+// return the next chunk size, `errno = 0` if theres still more chunk to
+// read, `errno = EOF` otherwise
+struct chunkSize getNextChunkPosition(FILE *file, long chunkSize) {
+  struct chunkSize chunk;
+  chunk.start = ftell(file);
+  fseek(file, chunkSize - 1, SEEK_CUR);
 
-  struct TaskQueue taskQueue;
-  long queue[words.length];
-  pthread_mutex_t qMutex;
-  if (pthread_mutex_init(&qMutex, NULL) != 0) {
-    fprintf(stderr, "Error making mutex: %s\n", strerror(errno));
-    exit(1);
+  char c = fgetc(file);
+  while (c != ' ' && c != '\n' && c != EOF) {
+    fputc(c, file);
+    fseek(file, -2, SEEK_CUR);
+    c = fgetc(file);
   }
-  taskQueue.queue = queue;
-  taskQueue.count = words.length;
-  taskQueue.current = 0;
-  taskQueue.mutex = qMutex;
+
+  errno = 0;
+  if (c != EOF) {
+    fputc(c, file);
+    chunk.end = ftell(file);
+  } else {
+    errno = EOF;
+    chunk.end = chunk.start + chunkSize;
+  }
+
+  return chunk;
+}
+
+void processFile(struct WordsToFind words, char *root, char *fileName) {
+  const struct mq_attr pAttr = {0, 10, sizeof(char *), 0};
+  mqd_t processQueue = createMqQueue("/process", O_WRONLY, &pAttr);
+
+  const struct mq_attr tAttr = {0, words.length, sizeof(struct chunkSize), 0};
+  mqd_t threadQueue = createMqQueue("/thread", O_WRONLY, &tAttr);
 
   pthread_mutex_t mutexes[words.length];
   int count[words.length];
   for (int i = 0; i < words.length; i++) {
     count[i] = 0;
-    queue[i] = 0;
     if (pthread_mutex_init(&mutexes[i], NULL) != 0) {
       fprintf(stderr, "Error making mutex: %s\n", strerror(errno));
       exit(1);
@@ -165,24 +196,33 @@ void processFile(struct WordsToFind words, char *root, char *file) {
 
   char *filePath = malloc(2 * sizeof(char[256]));
   strcpy(filePath, root);
-  strcat(filePath, file);
+  strcat(filePath, fileName);
 
-  struct ThreadArgs arg = {words.words, count, mutexes, &taskQueue, filePath};
+  struct ThreadArgs arg = {words.words, count, mutexes, filePath, &tAttr, 0};
 
   for (int i = 0; i < MAX_THREADS; i++) {
     pthread_create(&threads[i], NULL, processText, (void *)&arg);
   }
 
-  /* struct Msg msg = {file}; */
-  /* if (mq_send(queueId, (const char *)&msg, sizeof(char *), 0) != 0) { */
-  /*   puts("error sending queue"); */
-  /* } */
+  FILE *file = fopen(filePath, "r");
+  struct chunkSize msg;
+  do {
+    msg = getNextChunkPosition(file, MAX_BYTES_PER_READ);
+    if (mq_send(threadQueue, (char *)&msg, sizeof(struct chunkSize), 0) != 0) {
+      fprintf(stderr, "Error sending queue to thread: %s\n", strerror(errno));
+      exit(1);
+    }
+  } while (errno != EOF);
+
+  arg.terminate = 1;
+
   for (int i = 0; i < MAX_THREADS; i++) {
     pthread_join(threads[i], NULL);
   }
 
   free(filePath);
-  mq_close(queueId);
+  mq_close(processQueue);
+  mq_close(threadQueue);
 }
 
 void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
@@ -203,7 +243,8 @@ void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
 }
 
 int main(void) {
-  mq_unlink(QUEUE_NAME);
+  mq_unlink("/process");
+  mq_unlink("/thread");
 
   char *tempwords[] = {"test", "hi"};
   const int wordsToFindLength = 2;
@@ -219,17 +260,18 @@ int main(void) {
 
   readFiles(wordsToFind, dir, 0);
 
-  mqd_t queueId = createMqQueue(O_RDONLY | O_NONBLOCK);
-  struct Msg msg;
+  const struct mq_attr pAttr = {0, 10, sizeof(char *), 0};
+  mqd_t queueId = createMqQueue("/process", O_RDONLY | O_NONBLOCK, &pAttr);
+  struct chunkSize msg;
 
   int deadProcesses = 0;
   while (1) {
-    if (mq_receive(queueId, (char *)&msg, sizeof(char *) + 1, NULL) != -1) {
-      printf("%s\n", msg.str);
+    if (mq_receive(queueId, (char *)&msg, sizeof(msg) + 1, NULL) != -1) {
+      /* printf("%lu\n", msg); */
     } else if (errno == EAGAIN && waitpid(-1, NULL, WNOHANG) != 0) {
       deadProcesses++;
     } else if (errno != EAGAIN) {
-      printf("Error mq_receive: %s\n", strerror(errno));
+      printf("Error process mq_receive: %s\n", strerror(errno));
     }
 
     if (deadProcesses == dir.amount) {
@@ -239,6 +281,7 @@ int main(void) {
 
   free(words);
   mq_close(queueId);
-  mq_unlink(QUEUE_NAME);
+  mq_unlink("/thread");
+  mq_unlink("/process");
   return 0;
 }
