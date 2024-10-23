@@ -13,6 +13,7 @@
 #define CHILD_ID 0
 #define MAX_THREADS 5
 #define MAX_BYTES_PER_READ 10
+
 struct chunkSize {
   long start;
   long end;
@@ -212,9 +213,6 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
   snprintf(qName, 255, "/thread%i", pid);
   mq_unlink(qName);
 
-  const struct mq_attr pAttr = {0, 10, sizeof(char *), 0};
-  mqd_t processQueue = createMqQueue("/process", O_WRONLY, &pAttr);
-
   const struct mq_attr tAttr = {0, words.length, sizeof(struct chunkSize), 0};
   mqd_t threadQueue = createMqQueue(qName, O_WRONLY, &tAttr);
 
@@ -231,10 +229,10 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
   }
 
   FILE *file = fopen(filePath, "r");
-  struct chunkSize msg;
+  struct chunkSize tMsg;
   do {
-    msg = getNextChunkPosition(file, MAX_BYTES_PER_READ);
-    if (mq_send(threadQueue, (char *)&msg, sizeof(struct chunkSize), 0) != 0) {
+    tMsg = getNextChunkPosition(file, MAX_BYTES_PER_READ);
+    if (mq_send(threadQueue, (char *)&tMsg, sizeof(tMsg), 0) != 0) {
       fprintf(stderr, "Error sending queue to thread: %s\n", strerror(errno));
       exit(1);
     }
@@ -246,13 +244,15 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
     pthread_join(threads[i], NULL);
   }
 
-  char *outputStr = malloc(100 * sizeof(char));
-  formatStrArray(outputStr, words.words, words.length);
-  char *outputInt = malloc(100 * sizeof(char));
-  formatIntArray(outputInt, words.count, words.length);
-  printf("Words: %s ; Found: %s \n", outputStr, outputInt);
-  free(outputInt);
-  free(outputStr);
+  const int pMsgSize = words.length * sizeof(int);
+  const struct mq_attr pAttr = {0, 10, sizeof(pMsgSize), 0};
+  mqd_t processQueue = createMqQueue("/process", O_WRONLY, &pAttr);
+
+  if (mq_send(processQueue, (char *)words.count, pMsgSize, 0) != 0) {
+    fprintf(stderr, "Error sending word count to process: %s\n",
+            strerror(errno));
+    exit(1);
+  }
 
   free(filePath);
   mq_close(processQueue);
@@ -305,14 +305,17 @@ int main(void) {
 
   readFiles(wordsToFind, dir, 0);
 
-  const struct mq_attr pAttr = {0, 10, sizeof(char *), 0};
+  const int msgSize = wordsToFindLength * sizeof(int);
+  const struct mq_attr pAttr = {0, 10, msgSize, 0};
   mqd_t queueId = createMqQueue("/process", O_RDONLY | O_NONBLOCK, &pAttr);
-  struct chunkSize msg;
 
+  int *wordsFound = malloc(msgSize);
   int deadProcesses = 0;
   while (1) {
-    if (mq_receive(queueId, (char *)&msg, sizeof(msg) + 1, NULL) != -1) {
-      /* printf("%lu\n", msg); */
+    if (mq_receive(queueId, (char *)wordsFound, msgSize, NULL) != -1) {
+      for (int i = 0; i < wordsToFindLength; i++) {
+        wordsToFind.count[i] += wordsFound[i];
+      }
     } else if (errno == EAGAIN && waitpid(-1, NULL, WNOHANG) != 0) {
       deadProcesses++;
     } else if (errno != EAGAIN) {
@@ -324,6 +327,15 @@ int main(void) {
     }
   }
 
+  char *outputStr = malloc(100 * sizeof(char));
+  formatStrArray(outputStr, wordsToFind.words, wordsToFind.length);
+  char *outputInt = malloc(100 * sizeof(char));
+  formatIntArray(outputInt, wordsToFind.count, wordsToFind.length);
+  printf("Words: %s \nFound: %s \n", outputStr, outputInt);
+  free(outputInt);
+  free(outputStr);
+
+  free(wordsFound);
   free(words);
   mq_close(queueId);
   mq_unlink("/process");
