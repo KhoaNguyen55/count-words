@@ -1,7 +1,7 @@
+#include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "format.c"
 #include "helper.c"
 #include "wordmap.c"
 
@@ -9,16 +9,8 @@
 #define MAX_THREADS 5
 #define MAX_BYTES_PER_READ 1024
 
-// each words and its associated count are implicit with the position
-struct WordsToFind {
-  char **words;
-  int *count;
-  pthread_mutex_t *mutexes;
-  int length;
-};
-
 struct ThreadArgs {
-  struct WordsToFind *words;
+  struct wordMap *map;
   char *filePath;
   const struct mq_attr *qAttr;
   char *qName;
@@ -27,13 +19,14 @@ struct ThreadArgs {
 
 // thread function for processing the text
 void *processText(void *args) {
+  // initialized datas needed
   struct ThreadArgs *arg = args;
   FILE *file = fopen(arg->filePath, "r");
 
   mqd_t threadQueue =
       createMqQueue(arg->qName, O_RDONLY | O_NONBLOCK, arg->qAttr);
 
-  char *word = malloc(100 * sizeof(char));
+  char *word = malloc(sizeof(char[100]));
 
   struct chunkSize chunk;
   while (1) {
@@ -61,7 +54,7 @@ void *processText(void *args) {
         if (size > 0) {
           // if a word is found then increment it
           // if its in the words we need to find
-          findWordAndIncrement(arg->words, word);
+          wordmapIncrement(arg->map, word);
         } else if (size == EOF) {
           break;
         }
@@ -77,7 +70,9 @@ void *processText(void *args) {
 }
 
 // process each file by creating threads for it
-void processFile(struct WordsToFind words, char *root, char *fileName) {
+void processFile(char *root, char *fileName) {
+  struct wordMap *map = wordmapCreate();
+
   // get the pid to create a inter thread communication
   pid_t pid = getpid();
   char *qName = malloc(sizeof(char[256]));
@@ -86,7 +81,7 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
   mq_unlink(qName);
 
   // create the queue
-  const struct mq_attr tAttr = {0, words.length, sizeof(struct chunkSize), 0};
+  const struct mq_attr tAttr = {0, 10, sizeof(struct chunkSize), 0};
   mqd_t threadQueue = createMqQueue(qName, O_WRONLY, &tAttr);
 
   pthread_t threads[MAX_THREADS];
@@ -96,7 +91,7 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
   strcpy(filePath, root);
   strcat(filePath, fileName);
 
-  struct ThreadArgs arg = {&words, filePath, &tAttr, qName, 0};
+  struct ThreadArgs arg = {map, filePath, &tAttr, qName, 0};
 
   // create the threads
   for (int i = 0; i < MAX_THREADS; i++) {
@@ -123,16 +118,11 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
   }
 
   // create queue to send all the data back to the main process
-  const int pMsgSize = words.length * sizeof(int);
-  const struct mq_attr pAttr = {0, 10, sizeof(pMsgSize), 0};
+  const struct mq_attr pAttr = {0, 10, sizeof(struct wordElement), 0};
   mqd_t processQueue = createMqQueue("/process", O_WRONLY, &pAttr);
-
-  // send the data
-  if (mq_send(processQueue, (char *)words.count, pMsgSize, 0) != 0) {
-    fprintf(stderr, "Error sending word count to process: %s\n",
-            strerror(errno));
-    exit(1);
-  }
+  // send all the data over to the main thread
+  /* wordmapPrintAllElements(map); */
+  wordmapSendAllElements(map, processQueue);
 
   // clean up
   free(filePath);
@@ -143,7 +133,7 @@ void processFile(struct WordsToFind words, char *root, char *fileName) {
 }
 
 // read all the files and fork a new process for each file
-void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
+void readFiles(struct Directory dir, int offset) {
   if (dir.amount <= offset) {
     // clean up since we don't need it anymore
     free(dir.files);
@@ -156,58 +146,42 @@ void readFiles(struct WordsToFind words, struct Directory dir, int offset) {
     fprintf(stderr, "Error forking directory: %s\n", strerror(errno));
     exit(1);
   case CHILD_ID:
-    processFile(words, dir.root, dir.files[offset]);
+    processFile(dir.root, dir.files[offset]);
     exit(0);
   default:
     // recursive loop
-    readFiles(words, dir, offset + 1);
+    readFiles(dir, offset + 1);
   }
 }
 
 int main(void) {
   // initalizing all the variables needed
-  char *tempwords[] = {"void", "the", "a", "machine", "thing"};
-  const int wordsToFindLength = 5;
-  char directory[] = "./files/";
+  /* char *tempwords[] = {"void", "the", "a", "machine", "thing"}; */
+  char directory[] = "./test/";
 
   mq_unlink("/process");
-  char **words = malloc(wordsToFindLength * sizeof(char *));
-  for (int i = 0; i < wordsToFindLength; i++) {
-    words[i] = tempwords[i];
-  }
-
-  pthread_mutex_t mutexes[wordsToFindLength];
-  int count[wordsToFindLength];
-  for (int i = 0; i < wordsToFindLength; i++) {
-    count[i] = 0;
-    if (pthread_mutex_init(&mutexes[i], NULL) != 0) {
-      fprintf(stderr, "Error making mutex: %s\n", strerror(errno));
-      exit(1);
-    }
-  }
-
-  struct WordsToFind wordsToFind = {words, count, mutexes, wordsToFindLength};
 
   // read the directory
   struct Directory dir = readDirectory(directory);
 
   // process the files
-  readFiles(wordsToFind, dir, 0);
+  readFiles(dir, 0);
 
   // initialize data for receiving
-  const int msgSize = wordsToFindLength * sizeof(int);
+  const int msgSize = sizeof(struct wordElement);
   const struct mq_attr pAttr = {0, 10, msgSize, 0};
   mqd_t queueId = createMqQueue("/process", O_RDONLY | O_NONBLOCK, &pAttr);
 
-  int *wordsFound = malloc(msgSize);
+  // recreate the wordmap from this side
+  struct wordMap *map = wordmapCreate();
+  struct wordElement wordCount;
   int deadProcesses = 0;
   while (1) {
     // get the words count
-    if (mq_receive(queueId, (char *)wordsFound, msgSize, NULL) != -1) {
-      for (int i = 0; i < wordsToFindLength; i++) {
-        // add it to the total;
-        wordsToFind.count[i] += wordsFound[i];
-      }
+    if (mq_receive(queueId, (char *)&wordCount, msgSize, NULL) != -1) {
+      // add it to the total
+      printf("word: %s (count=%i)\n", wordCount.word, wordCount.count);
+      /* wordmapAdd(map, wordCount); */
     } else if (errno == EAGAIN && waitpid(-1, NULL, WNOHANG) != 0) {
       deadProcesses++;
     } else if (errno != EAGAIN) {
@@ -220,18 +194,11 @@ int main(void) {
     }
   }
 
-  // print the words and it's counts
-  char *outputStr = malloc(1000 * sizeof(char));
-  formatStrArray(outputStr, wordsToFind.words, wordsToFind.length);
-  char *outputInt = malloc(1000 * sizeof(char));
-  formatIntArray(outputInt, wordsToFind.count, wordsToFind.length);
-  printf("Words: %s \nFound: %s \n", outputStr, outputInt);
+  wordmapPrintAllElements(map);
 
   // clean up
-  free(outputInt);
-  free(outputStr);
-  free(wordsFound);
-  free(words);
+  hashmap_free(map->map);
+  free(map);
   mq_close(queueId);
   mq_unlink("/process");
   return 0;
