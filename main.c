@@ -1,25 +1,13 @@
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <mqueue.h>
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "format.c"
+#include "helper.c"
+#include "wordmap.c"
 
 #define CHILD_ID 0
 #define MAX_THREADS 5
 #define MAX_BYTES_PER_READ 1024
-
-// structs for data encapsulation
-
-struct chunkSize {
-  long start;
-  long end;
-};
 
 // each words and its associated count are implicit with the position
 struct WordsToFind {
@@ -36,110 +24,6 @@ struct ThreadArgs {
   char *qName;
   int terminate;
 };
-
-struct Directory {
-  char *root;
-  char **files;
-  int amount;
-};
-
-// function to format list of int to string
-void formatIntArray(char *output, int *list, int length) {
-  int len = 0;
-  len += sprintf(output + len, "[");
-  for (int i = 0; i < length; i++) {
-    len += sprintf(output + len, "%7i, ", list[i]);
-  }
-  sprintf(output + len - 2, "]");
-}
-
-// function to format list of string to string
-void formatStrArray(char *output, char **list, int length) {
-  int len = 0;
-  len += sprintf(output + len, "[");
-  for (int i = 0; i < length; i++) {
-    len += sprintf(output + len, "%7s, ", list[i]);
-  }
-  sprintf(output + len - 2, "]");
-}
-
-// function to read files inside a directory
-struct Directory readDirectory(char *directory) {
-  struct Directory dir;
-  dir.root = directory;
-  dir.files = malloc(sizeof(char *));
-  dir.amount = 0;
-
-  // open the folder
-  DIR *dirStream = opendir(directory);
-  if (dirStream == NULL) {
-    fprintf(stderr, "Error open directory: %s\n", strerror(errno));
-    exit(1);
-  }
-
-  // loop through the files
-  struct dirent *file = readdir(dirStream);
-  int i = 1;
-  while (file != NULL) {
-    // ignore hidden files
-    if (file->d_name[0] != '.') {
-      // add the file name to the array of files
-      dir.files[dir.amount] = file->d_name;
-      dir.amount++;
-      if (dir.amount > i) {
-        i *= 2;
-        char **temp = reallocarray(dir.files, sizeof(char *), i);
-        if (temp == NULL) {
-          fprintf(stderr, "Error reallocating memory: %s\n", strerror(errno));
-          exit(1);
-        }
-        dir.files = temp;
-      }
-    }
-    file = readdir(dirStream);
-  }
-
-  return dir;
-}
-
-// create a message queue
-mqd_t createMqQueue(char *queueName, int flags, const struct mq_attr *attr) {
-  mqd_t queueId = mq_open(queueName, flags | O_CREAT, 0600, attr);
-  if (queueId == -1) {
-    fprintf(stderr, "Error mq_open: %s\n", strerror(errno));
-    exit(1);
-  }
-
-  return queueId;
-}
-
-// get the next word from the file
-int getWord(FILE *file, char *output, int maxSize) {
-  char c = fgetc_unlocked(file);
-  int i = 0;
-  while (c != ' ' && c != '\n' && i < maxSize) {
-    if (c == EOF) {
-      return EOF;
-    }
-    output[i] = c;
-    i++;
-    c = fgetc_unlocked(file);
-  }
-  output[i] = '\0';
-  return i;
-}
-
-// find a word and increment its count
-void findWordAndIncrement(struct WordsToFind *words, char *word) {
-  for (int i = 0; i < words->length; i++) {
-    if (strcmp(words->words[i], word) == 0) {
-      pthread_mutex_lock(&words->mutexes[i]);
-      words->count[i] += 1;
-      pthread_mutex_unlock(&words->mutexes[i]);
-      break;
-    }
-  }
-}
 
 // thread function for processing the text
 void *processText(void *args) {
@@ -190,35 +74,6 @@ void *processText(void *args) {
   // clean up
   free(word);
   pthread_exit(0);
-}
-
-// return the next chunk size, `errno = 0` if theres still more chunk to
-// read, `errno = EOF` otherwise
-struct chunkSize getNextChunkPosition(FILE *file, long chunkSize) {
-  struct chunkSize chunk;
-  // get the start of the chunk
-  chunk.start = ftell(file);
-  fseek(file, chunkSize - 1, SEEK_CUR);
-
-  // look for a space, newline or end of line, to seperate the chunk
-  // this is to make sure the chunk don't cut off a word midway
-  char c = fgetc(file);
-  while (c != ' ' && c != '\n' && c != EOF) {
-    fputc(c, file);
-    fseek(file, -2, SEEK_CUR);
-    c = fgetc(file);
-  }
-
-  errno = 0;
-  if (c != EOF) {
-    fputc(c, file);
-    chunk.end = ftell(file);
-  } else {
-    errno = EOF;
-    chunk.end = chunk.start + chunkSize;
-  }
-
-  return chunk;
 }
 
 // process each file by creating threads for it
@@ -366,9 +221,9 @@ int main(void) {
   }
 
   // print the words and it's counts
-  char *outputStr = malloc(100 * sizeof(char));
+  char *outputStr = malloc(1000 * sizeof(char));
   formatStrArray(outputStr, wordsToFind.words, wordsToFind.length);
-  char *outputInt = malloc(100 * sizeof(char));
+  char *outputInt = malloc(1000 * sizeof(char));
   formatIntArray(outputInt, wordsToFind.count, wordsToFind.length);
   printf("Words: %s \nFound: %s \n", outputStr, outputInt);
 
