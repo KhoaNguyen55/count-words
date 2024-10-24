@@ -31,7 +31,7 @@ mqd_t createMqQueue(char *queueName, int flags, const struct mq_attr *attr) {
 int getWord(FILE *file, char *output, int maxSize) {
   char c = fgetc_unlocked(file);
   int i = 0;
-  while (c != ' ' && c != '\n' && i < maxSize) {
+  while (c != '\t' & c != ' ' && c != '\n' && i < maxSize) {
     if (c == EOF) {
       return EOF;
     }

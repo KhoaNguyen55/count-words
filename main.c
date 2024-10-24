@@ -156,8 +156,7 @@ void readFiles(struct Directory dir, int offset) {
 
 int main(void) {
   // initalizing all the variables needed
-  /* char *tempwords[] = {"void", "the", "a", "machine", "thing"}; */
-  char directory[] = "./test/";
+  char directory[] = "./files/";
 
   mq_unlink("/process");
 
@@ -180,8 +179,7 @@ int main(void) {
     // get the words count
     if (mq_receive(queueId, (char *)&wordCount, msgSize, NULL) != -1) {
       // add it to the total
-      printf("word: %s (count=%i)\n", wordCount.word, wordCount.count);
-      /* wordmapAdd(map, wordCount); */
+      wordmapAdd(map, &wordCount);
     } else if (errno == EAGAIN && waitpid(-1, NULL, WNOHANG) != 0) {
       deadProcesses++;
     } else if (errno != EAGAIN) {

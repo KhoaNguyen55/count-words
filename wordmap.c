@@ -80,7 +80,7 @@ void wordmapPrintAllElements(struct wordMap *wm) {
   void *item;
   while (hashmap_iter(wm->map, &iter, &item)) {
     const struct wordElement *element = item;
-    printf("word: %s (count=%i)\n", element->word, element->count);
+    printf("word: '%s' (count=%i)\n", element->word, element->count);
   }
 }
 
