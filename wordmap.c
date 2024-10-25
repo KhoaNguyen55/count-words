@@ -5,8 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "thirdparty/hashmap.c"
-#include "thirdparty/hashmap.h"
+#include "thirdparty/hashmap.c/hashmap.h"
 
 #define MAX_WORD_SIZE 256
 
