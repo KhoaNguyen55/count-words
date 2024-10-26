@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define INITIAL_DIR_FILES_SIZE 5
+
 struct Directory {
   char *root;
   char **files;
@@ -76,7 +78,7 @@ struct chunkSize getNextChunkPosition(FILE *file, long chunkSize) {
 struct Directory readDirectory(char *directory) {
   struct Directory dir;
   dir.root = directory;
-  dir.files = malloc(sizeof(char *));
+  dir.files = malloc(sizeof(*dir.files) * INITIAL_DIR_FILES_SIZE);
   dir.amount = 0;
 
   // open the folder
@@ -88,16 +90,20 @@ struct Directory readDirectory(char *directory) {
 
   // loop through the files
   struct dirent *file = readdir(dirStream);
-  int i = 1;
+  int current_size = 1;
   while (file != NULL) {
     // ignore hidden files
     if (file->d_name[0] != '.') {
       // add the file name to the array of files
-      dir.files[dir.amount] = file->d_name;
+      dir.files[dir.amount] = malloc(sizeof(char[256]) + 1);
+      if (dir.files[dir.amount] == NULL) {
+        fprintf(stderr, "Error malloc dir files: %s\n", strerror(errno));
+      }
+      strcpy(dir.files[dir.amount], file->d_name);
       dir.amount++;
-      if (dir.amount > i) {
-        i *= 2;
-        char **temp = reallocarray(dir.files, sizeof(char *), i);
+      if (dir.amount >= current_size) {
+        current_size *= 2;
+        char **temp = reallocarray(dir.files, sizeof(*dir.files), current_size);
         if (temp == NULL) {
           fprintf(stderr, "Error reallocating memory: %s\n", strerror(errno));
           exit(1);

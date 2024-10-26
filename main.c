@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -26,8 +28,7 @@ void *processText(void *args) {
   mqd_t threadQueue =
       createMqQueue(arg->qName, O_RDONLY | O_NONBLOCK, arg->qAttr);
 
-  char *word = malloc(sizeof(char[100]));
-
+  char *word = malloc(sizeof(char[256]));
   struct chunkSize chunk;
   while (1) {
     // check if the parent thread want this thread to be terminated
@@ -50,7 +51,7 @@ void *processText(void *args) {
       }
       // read each word until the end of the chunk
       while (ftell(file) < chunk.end) {
-        int size = getWord(file, word, 100);
+        int size = getWord(file, word, sizeof(char[256]) - 1);
         if (size > 0) {
           // if a word is found then increment it
           // if its in the words we need to find
@@ -87,9 +88,8 @@ void processFile(char *root, char *fileName) {
   pthread_t threads[MAX_THREADS];
 
   // add in the arguments for the thread function
-  char *filePath = malloc(2 * sizeof(char[256]));
-  strcpy(filePath, root);
-  strcat(filePath, fileName);
+  char *filePath = malloc(sizeof(char[256 * 2]));
+  snprintf(filePath, sizeof(char[256 * 2]), "%s%s", root, fileName);
 
   struct ThreadArgs arg = {map, filePath, &tAttr, qName, 0};
 
@@ -141,22 +141,24 @@ void readFiles(struct Directory dir, int offset) {
   }
 
   // fork a new process and process each files
-  switch (fork()) {
-  case -1:
+  int pid = fork();
+  if (pid == -1) {
     fprintf(stderr, "Error forking directory: %s\n", strerror(errno));
     exit(1);
-  case CHILD_ID:
-    processFile(dir.root, dir.files[offset]);
+  } else if (pid == CHILD_ID) {
+    char *fileName = malloc(sizeof(char[256]));
+    strncpy(fileName, dir.files[offset], sizeof(char[256]));
+    processFile(dir.root, fileName);
+    free(fileName);
     exit(0);
-  default:
-    // recursive loop
+  } else {
     readFiles(dir, offset + 1);
   }
 }
 
 int main(void) {
   // initalizing all the variables needed
-  char directory[] = "./files/";
+  char directory[] = "../files/";
 
   mq_unlink("/process");
 
