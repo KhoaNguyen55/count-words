@@ -39,6 +39,11 @@ int getWord(FILE *file, char *output, int maxSize) {
     }
     output[i] = c;
     i++;
+    // escape " character for csv
+    if (c == '"') {
+      output[i] = c;
+      i++;
+    }
     c = fgetc_unlocked(file);
   }
   output[i] = '\0';

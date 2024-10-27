@@ -198,7 +198,7 @@ int main(void) {
     }
   }
 
-  wordmapPrintAllElements(map);
+  wordmapOutputCsv(map);
 
   // clean up
   hashmap_free(map->map);

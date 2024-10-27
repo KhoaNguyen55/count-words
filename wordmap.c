@@ -74,12 +74,13 @@ void wordmapIncrement(struct wordMap *wm, char *word) {
 }
 
 // print all elements
-void wordmapPrintAllElements(struct wordMap *wm) {
+void wordmapOutputCsv(struct wordMap *wm) {
   size_t iter = 0;
   void *item;
+  puts("word,count");
   while (hashmap_iter(wm->map, &iter, &item)) {
     const struct wordElement *element = item;
-    printf("word: '%s' (count=%i)\n", element->word, element->count);
+    printf("\"%s\",%i\n", element->word, element->count);
   }
 }
 
