@@ -8,7 +8,11 @@
 #include "wordmap.c"
 
 #define CHILD_ID 0
+#ifndef SINGLETHREAD
 #define MAX_THREADS 5
+#else
+#define MAX_THREADS 1
+#endif
 #define MAX_BYTES_PER_READ 1024
 
 struct ThreadArgs {
