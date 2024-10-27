@@ -7,6 +7,9 @@
 
 #include "thirdparty/hashmap.c/hashmap.h"
 
+#ifndef WORDMAP
+#define WORDMAP
+
 #define MAX_WORD_SIZE 256
 
 struct wordElement {
@@ -99,3 +102,5 @@ void wordmapSendAllElements(struct wordMap *wm, mqd_t queueId) {
     }
   }
 }
+
+#endif
