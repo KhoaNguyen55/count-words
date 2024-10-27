@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #ifndef HANDLEFILES
-#define HANDELFILES
+#define HANDLEFILES
 
 #include "handleText.c"
 #include "multiThread.c"
