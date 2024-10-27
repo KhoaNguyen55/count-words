@@ -7,8 +7,6 @@
 #include "handleFiles.c"
 #include "handleText.c"
 
-#define CHILD_ID 0
-
 int main(void) {
   // initalizing all the variables needed
   char directory[] = "../files/";
