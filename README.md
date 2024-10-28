@@ -6,55 +6,89 @@
 # Code Documentation
 ## File Structure
 
-The codebase consists of three main files:
+1. **handleFiles.c**
+2. **handleText.c**
+3. **multiThread.c**
+4. **wordmap.c**
+5. **main.c**
 
-1. **main.c**: The main application logic, including file processing and threading.
-2. **helper.c**: Helper functions for directory reading and file operations.
-3. **wordmap.c**: Functions for managing a hashmap of words and their counts.
+## 1. handleFiles.c
 
-## Detailed Breakdown
+**Purpose**: 
+Manages reading files from a directory and processing them.
 
-### main.c
+**Key Components**:
+- **Structs**:
+  - `Directory`: Holds the directory path, an array of file names, and the count of files.
   
-- **Definitions**:
-  - `MAX_THREADS`: Maximum number of threads to be used based on compilation flags.
-  - `MAX_BYTES_PER_READ`: Maximum bytes to read in a single operation.
+- **Functions**:
+  - `struct Directory readDirectory(char *directory)`: Reads all non-hidden files in the specified directory and stores their names in a `Directory` struct.
+  - `void processFile(char *root, char *fileName)`: Processes an individual file by creating threads to read chunks of the file and count words.
+  - `void readFiles(struct Directory dir, int offset)`: Forks a new process for each file in the directory and calls `processFile`.
 
-- **Data Structures**:
-  - `struct ThreadArgs`: Holds arguments for the thread function, including a pointer to the word map, file path, message queue attributes, queue name, and a termination flag.
+**Concurrency**: Uses threading to process multiple files simultaneously.
+
+## 2. handleText.c
+
+**Purpose**: 
+Handles the reading and processing of text within files.
+
+**Key Components**:
+- **Structs**:
+  - `chunkSize`: Represents the start and end positions of a chunk in a file.
 
 - **Functions**:
-  - `void *processText(void *args)`: Thread function that processes text by reading words from assigned chunks and updating the word map.
-  - `void processFile(char *root, char *fileName)`: Creates threads for processing a file, manages message queues, and sends word counts back to the main process.
-  - `void readFiles(struct Directory dir, int offset)`: Forks processes to read files from a directory.
-  - `int main(void)`: Main entry point, initializes directory reading, processes files, and collects results.
+  - `int getWord(FILE *file, char *output, int maxSize)`: Reads the next word from a file, handling special cases for CSV formatting.
+  - `struct chunkSize getNextChunkPosition(FILE *file, long chunkSize)`: Determines the next chunk of data to read, ensuring not to split words.
+  - `void *processText(void *args)`: The thread function that processes the text chunks, reading words and updating counts.
 
-### helper.c
+**Concurrency**: Utilizes message queues for communication between threads and the main process.
 
-- **Data Structures**:
-  - `struct Directory`: Represents a directory with its root path, an array of file names, and the count of files.
-  - `struct chunkSize`: Represents a chunk of data with start and end positions for processing.
+## 3. multiThread.c
 
-- **Functions**:
-  - `mqd_t createMqQueue(char *queueName, int flags, const struct mq_attr *attr)`: Creates a message queue.
-  - `int getWord(FILE *file, char *output, int maxSize)`: Reads the next word from the file, handling whitespace and CSV escaping.
-  - `struct chunkSize getNextChunkPosition(FILE *file, long chunkSize)`: Determines the next chunk of text to read from the file, ensuring word boundaries.
-  - `struct Directory readDirectory(char *directory)`: Reads the contents of a directory, populating the `Directory` struct.
+**Purpose**: 
+Defines structures and functions for managing threading.
 
-### wordmap.c
-
-- **Data Structures**:
-  - `struct wordElement`: Represents a word and its count.
-  - `struct wordMap`: Holds a hashmap for words and a mutex for thread safety.
+**Key Components**:
+- **Structs**:
+  - `ThreadArgs`: Holds arguments passed to threads, including a word map, file path, message queue attributes, and termination flag.
 
 - **Functions**:
-  - `int compare(const void *a, const void *b, void *data)`: Comparison function for the hashmap.
-  - `uint64_t hash(const void *item, uint64_t seed0, uint64_t seed1)`: Hashing function for the hashmap.
-  - `struct wordMap *wordmapCreate(void)`: Creates and initializes a word map.
-  - `void wordmapAdd(struct wordMap *wm, struct wordElement *word)`: Adds a word to the map or increments its count.
+  - `mqd_t createMqQueue(char *queueName, int flags, const struct mq_attr *attr)`: Creates and opens a message queue for communication between processes.
+
+## 4. wordmap.c
+
+**Purpose**: 
+Implements a thread-safe word counting mechanism using a hash map.
+
+**Key Components**:
+- **Structs**:
+  - `wordElement`: Represents a word and its count.
+  - `wordMap`: Contains a hash map for storing word counts and a mutex for thread safety.
+
+- **Functions**:
+  - `struct wordMap *wordmapCreate(void)`: Initializes a new word map.
+  - `void wordmapAdd(struct wordMap *wm, struct wordElement *word)`: Adds a word to the map, merging counts if it already exists.
   - `void wordmapIncrement(struct wordMap *wm, char *word)`: Increments the count of a word in the map.
-  - `void wordmapOutputCsv(struct wordMap *wm)`: Outputs the word map to CSV format.
-  - `void wordmapSendAllElements(struct wordMap *wm, mqd_t queueId)`: Sends all elements from the word map to a message queue.
+  - `void wordmapOutputCsv(struct wordMap *wm)`: Outputs the contents of the word map in CSV format.
+  - `void wordmapSendAllElements(struct wordMap *wm, mqd_t queueId)`: Sends all elements of the word map to a message queue.
+
+## 5. main.c
+
+**Purpose**: 
+Entry point of the program, orchestrating the reading and processing of files.
+
+**Key Components**:
+- Initializes necessary variables and reads the directory specified.
+- Calls `readFiles` to begin processing.
+- Listens for results on a message queue, accumulating word counts.
+- Outputs the final word counts in CSV format.
+
+**Flow**:
+1. Read directory to get files.
+2. For each file, fork a new process and process it.
+3. Collect results using a message queue.
+4. Print results and clean up resources.
 
 # Report
 
